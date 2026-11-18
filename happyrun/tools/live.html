@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>happyrun 实时轨迹</title>
+<style>
+ html,body{margin:0;height:100%;overflow:hidden;background:#e8eaed;font:13px/1.5 "Microsoft YaHei",sans-serif}
+ #cv{display:block}
+ #panel{position:fixed;top:0;left:0;right:0;background:#1b2430e6;color:#dfe7f0;padding:10px 18px;z-index:5;display:flex;gap:30px;align-items:center;box-shadow:0 1px 8px #0009}
+ #panel .big{font-size:22px;font-weight:bold;color:#7fd48a}
+ #panel .lab{font-size:11px;color:#8fa3b8}
+ #phase{position:fixed;top:64px;left:16px;z-index:5;background:#2e8b57e6;color:#fff;padding:4px 14px;border-radius:14px;font-weight:bold}
+ #scalebar{position:fixed;bottom:14px;left:16px;color:#fff;font-size:12px;z-index:5;text-shadow:0 0 4px #000}
+</style></head><body>
+<div id="panel">
+ <div><div class="big" id="stKm">0.00 km</div><div class="lab">已跑距离</div></div>
+ <div><div class="big" id="stPace">--'--"</div><div class="lab">当前配速</div></div>
+ <div><div class="big" id="stPlan">--'--"</div><div class="lab">计划配速</div></div>
+ <div><div class="big" id="stPct">0%</div><div class="lab">进度</div></div>
+ <div><div class="big" id="stEta">--:--</div><div class="lab">预计跑完</div></div>
+ <div><div class="big" id="stCp">0/0</div><div class="lab">打卡点</div></div>
+</div>
+<div id="phase">等待数据…</div>
+<div id="scalebar"></div>
+<canvas id="cv"></canvas>
+<script>
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0;
+function resize() { W = cv.width = innerWidth; H = cv.height = innerHeight; }
+addEventListener('resize', () => { resize(); draw(dispEl); }); resize();
+
+const TILE = 256, PI = Math.PI;
+const lngToPx = (lng, z) => ((lng + 180) / 360) * (1 << z) * TILE;
+const latToPx = (lat, z) => { const s = Math.sin(lat * PI / 180); return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * PI)) * (1 << z) * TILE; };
+
+const bg = new Image(); bg.src = '/bg-road.png';
+let META = null, TRACK = null, STATUS = null, cam = null, zoom = 1, camInit = false;
+const M_PER_PX = 156543.03 * Math.cos(37.749 * PI / 180) / (1 << 18); // 底图固定 z18
+
+fetch('/api/meta').then(r => r.json()).then(m => { META = m; ready(); }).catch(() => {});
+fetch('/api/track').then(r => r.ok ? r.json() : Promise.reject()).then(t => { if (t && t.points && t.points.length) { TRACK = t; ready(); } }).catch(() => {});
+let statusAt = 0; // 本次 STATUS 的本地接收时刻（用于亚秒内插，消除 1s 轮询的跳格）
+setInterval(async () => { try { const r = await fetch('/api/status'); if (r.ok) { STATUS = await r.json(); statusAt = Date.now(); } } catch (e) {} }, 700);
+
+function ready() {
+  if (META && TRACK) buildCpIdx(); // 打卡点命中序号（此前从未调用 → 计数恒 0/3 的 bug 修复）
+  if (META && TRACK && !camInit) {
+  camInit = true;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const [lat, lon] of TRACK.points) {
+    const x = lngToPx(lon, META.z) - META.x0w, y = latToPx(lat, META.z) - META.y0w;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  const pad = 60;
+  zoom = Math.min((W - pad * 2) / Math.max(1, x1 - x0), (H - pad * 2 - 60) / Math.max(1, y1 - y0));
+  cam = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+} }
+const w2s = (wx, wy) => [(wx - cam.x) * zoom + W / 2, (wy - cam.y) * zoom + H / 2 + 24];
+const WGS = (lat, lon) => [lngToPx(lon, META.z) - META.x0w, latToPx(lat, META.z) - META.y0w];
+
+// 每个打卡点在轨迹中的命中序号（一次算好）
+let cpIdx = [];
+function buildCpIdx() {
+  if (!TRACK || !TRACK.passPoints) return;
+  cpIdx = TRACK.passPoints.map(cp => {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < TRACK.points.length; i++) {
+      const [x, y] = WGS(TRACK.points[i][0], TRACK.points[i][1]);
+      const [gx, gy] = WGS(cp.lat, cp.lon);
+      const d = Math.hypot(x - gx, y - gy);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  });
+}
+
+// ── 丝滑时钟：用 waitStartEpoch（本地钟、与轨迹同基准）直算连续秒数，无量化无锯齿 ──
+function targetElapsed() {
+  if (!TRACK) return 0;
+  if (!STATUS) return 0;                         // 没开始跑 → 定位点停在起点，轨迹为空
+  if (STATUS.phase === 'done') return TRACK.points.length - 1;
+  if (STATUS.waitStartEpoch) {
+    const el = Date.now() / 1000 - STATUS.waitStartEpoch;
+    return Math.max(0, Math.min(TRACK.points.length - 1, el));
+  }
+  if (STATUS.elapsedS != null) return Math.max(0, Math.min(TRACK.points.length - 1, STATUS.elapsedS));
+  return 0;
+}
+
+let dispEl = 0, lastTs = 0, clockInit = false;
+function tick(ts) {
+  requestAnimationFrame(tick);
+  const dt = lastTs ? Math.min(0.12, (ts - lastTs) / 1000) : 0.016;
+  lastTs = ts;
+  const target = targetElapsed();
+  if (!clockInit) { dispEl = target; clockInit = true; }
+  const gap = target - dispEl;
+  if (Math.abs(gap) > 3 || gap < -1.2) dispEl = target;  // 大偏差/状态回退 → 立即对齐
+  else dispEl += gap * Math.min(1, dt * 5);              // 每帧向目标平滑追随（丝滑核心）
+  draw(dispEl);
+}
+
+const TRACKC = [43, 58, 85];
+let dispKm = 0, kmInit = false;
+function draw(t) {
+  if (!W || !META) return;
+  ctx.fillStyle = '#e8eaed'; ctx.fillRect(0, 0, W, H);
+  if (!cam) return;
+  if (bg.complete && bg.naturalWidth) {
+    const [bx, by] = w2s(0, 0);
+    ctx.drawImage(bg, bx, by, META.W * zoom, META.H * zoom);
+  }
+  if (!TRACK) return;
+  // 浮点时刻 → 所在线段 + 段内比例（定位点连续滑动的基础）
+  const i = Math.max(0, Math.min(TRACK.points.length - 2, Math.floor(t)));
+  const f = Math.max(0, Math.min(1, t - i));
+  const w2 = (p) => w2s(...WGS(p[0], p[1]));
+  const tipW = [TRACK.points[i][0] + (TRACK.points[i + 1][0] - TRACK.points[i][0]) * f,
+                TRACK.points[i][1] + (TRACK.points[i + 1][1] - TRACK.points[i][1]) * f];
+  const tip = w2s(...WGS(tipW[0], tipW[1]));
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  // 已跑轨迹：尾迹终点严格 = 定位点当前位置，逐帧延伸（未跑部分不显示任何预览）
+  ctx.strokeStyle = `rgb(${TRACKC[0]},${TRACKC[1]},${TRACKC[2]})`;
+  ctx.lineWidth = Math.max(3, 6 / Math.sqrt(zoom));
+  ctx.beginPath();
+  for (let k = 0; k <= i; k++) { const [x, y] = w2(TRACK.points[k]); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.lineTo(tip[0], tip[1]);
+  ctx.stroke();
+  // 起点（绿点白圈）
+  { const [x, y] = w2(TRACK.points[0]);
+    ctx.beginPath(); ctx.arc(x, y, 10, 0, 2 * PI); ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 7.5, 0, 2 * PI); ctx.fillStyle = '#2eb872'; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, 2 * PI); ctx.fillStyle = '#fff'; ctx.fill(); }
+  // 打卡点（已到的红色实心+序号+刚经过时弹入，未到的白圈灰字）
+  (TRACK.passPoints || []).forEach((cp, k) => {
+    const [x, y] = w2s(...WGS(cp.lat, cp.lon));
+    const done = cpIdx[k] <= i;
+    let r = done ? 13 : 10;
+    if (done) { const age = i + f - cpIdx[k]; if (age >= 0 && age < 1.6) r = 13 + 10 * (1 - age / 1.6); }
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * PI);
+    ctx.fillStyle = done ? '#eb5757' : '#ffffffcc'; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = done ? '#fff' : '#8a8f98'; ctx.stroke();
+    if (done) { ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(k + 1), x, y + 1); }
+  });
+  // 当前定位点（蓝色呼吸光晕 + 白圈蓝芯，真实 App 观感）
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 320);
+  ctx.beginPath(); ctx.arc(tip[0], tip[1], 15 + 6 * pulse, 0, 2 * PI); ctx.fillStyle = 'rgba(26,115,232,0.16)'; ctx.fill();
+  ctx.beginPath(); ctx.arc(tip[0], tip[1], 9.5, 0, 2 * PI); ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.beginPath(); ctx.arc(tip[0], tip[1], 7, 0, 2 * PI); ctx.fillStyle = '#1a73e8'; ctx.fill();
+  // 比例尺
+  const mPerPx = M_PER_PX / zoom;
+  let bar = 100; if (mPerPx * bar > 240) bar = 50; if (mPerPx * bar > 240) bar = 20;
+  ctx.fillStyle = '#fff'; ctx.fillRect(20, H - 26, bar / mPerPx, 4);
+  ctx.font = '12px sans-serif'; ctx.fillText(bar + 'm', 20, H - 32);
+  updateStats(Math.floor(t), i, f);
+}
+
+function fmtP(s) { s = Math.round(s); return Math.floor(s / 60) + "'" + String(s % 60).padStart(2, '0') + '"'; }
+let lastStats = 0;
+function updateStats(idx, i, f) {
+  const now = Date.now();
+  if (now - lastStats < 400) return;
+  lastStats = now;
+  if (STATUS) {
+    // 距离数字与定位点同步平滑滚动（每帧向目标靠近，不跳格）
+    if (STATUS.simKm != null) {
+      if (!kmInit) { dispKm = STATUS.simKm; kmInit = true; }
+      dispKm += (STATUS.simKm - dispKm) * 0.12;
+      document.getElementById('stKm').textContent = dispKm.toFixed(2) + ' km';
+    }
+    document.getElementById('stPace').textContent = STATUS.curPaceS ? fmtP(STATUS.curPaceS) : '--\'--"';
+    document.getElementById('stPct').textContent = (STATUS.totalS ? Math.min(100, Math.round(100 * STATUS.elapsedS / STATUS.totalS)) : 0) + '%';
+    if (STATUS.runEtaEpoch) document.getElementById('stEta').textContent = new Date(STATUS.runEtaEpoch * 1000).toTimeString().slice(0, 5);
+    const ph = ({ running: '跑步进行中', uploading: '上传中…', finishing: '收尾中…', done: '已完成 ✓', aborted: '已中止', starting: '启动中' })[STATUS.phase] || STATUS.phase;
+    document.getElementById('phase').textContent = ph;
+    document.getElementById('phase').style.background = STATUS.phase === 'done' ? '#2e8b57e6' : '#1a73e8e6';
+  }
+  if (TRACK) document.getElementById('stPlan').textContent = TRACK.plannedPace || '--';
+  if (TRACK && TRACK.passPoints) {
+    const done = cpIdx.filter(c => c <= idx).length;
+    document.getElementById('stCp').textContent = done + '/' + TRACK.passPoints.length;
+  }
+}
+requestAnimationFrame(tick);
+</script></body></html>

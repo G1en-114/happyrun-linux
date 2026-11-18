@@ -1,0 +1,31 @@
+{
+  "_comment": "模板文件。真实凭证用 capture 抓包自动生成（会覆盖本文件），或手动填入。",
+  "baseUrl": "https://tyxyzhpt.tyut.edu.cn",
+  "school_id": 95,
+  "term_id": null,
+  "course_id": null,
+  "class_id": 3680,
+  "student_num": "<学号>",
+  "card_id": "<学号>",
+  "uid": "<uid>",
+  "token": "<token>",
+  "mobileModel": "iPhone14,3",
+  "run": {
+    "distanceKm": 3.0,
+    "distanceMinKm": 3.0,
+    "distanceMaxKm": 3.35,
+    "paceMinS": 195,
+    "paceMaxS": 210,
+    "timeAnchorS": 643,
+    "timeJitterS": 8,
+    "usedTimeS": 700,
+    "centerLat": 37.749,
+    "centerLon": 112.72,
+    "loopRadius": 200,
+    "distanceK": 0.04,
+    "distJitter": 0.02,
+    "timeJitterM": 5,
+    "jitterM": 4,
+    "paceJitterS": 4
+  }
+}

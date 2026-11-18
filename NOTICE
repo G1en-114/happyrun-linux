@@ -1,0 +1,18 @@
+HappyRun Linux portable edition
+===============================
+
+Core logic (auto-run.mjs, lib/, capture/happyrun-capture.py, tools/) is based on:
+
+    Fuck-You-HappyRun
+    https://github.com/Suzuran28/Fuck-You-HappyRun
+    Copyright (c) 2026 Suzuran
+    MIT License
+
+Modifications in this repository:
+
+  * Linux/macOS launchers (start.sh, run-formal.sh, watch.mjs, result.mjs)
+  * Linux packet capture: nftables transparent mode + proxy mode + CA installer
+  * Packaging: removed development scratch files, logs and personal credentials
+  * Docs rewritten for Linux
+
+The upstream project is for protocol research / technical exchange only.

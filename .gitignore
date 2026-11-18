@@ -1,0 +1,22 @@
+# ── 凭证：绝对不能提交 ──
+happyrun/config.json
+happyrun/capture/logs/
+happyrun/capture/STOP
+!happyrun/capture/logs/.gitkeep
+
+# ── 运行产物（含学号 / token / 轨迹） ──
+happyrun/formal-run.log
+happyrun/formal-run.err.log
+happyrun/formal-run.status.json
+happyrun/formal-run.track.json
+happyrun/run-history-*.jsonl
+happyrun/run-live-*.log
+happyrun/record-preview.json
+happyrun/tools/editor/bg-sat.png
+
+# ── 杂项 ──
+happyrun/capture/__pycache__/
+*.pyc
+.DS_Store
+*.zip
+*.tar.gz
