@@ -216,6 +216,14 @@ Node 必须带系统 CA：脚本已自动加 `--use-system-ca`；低版本 Node 
 **路径带中文/空格？**
 bash 脚本本身没问题，但最稳的还是放纯英文路径。
 
+**用了 Clash / mihomo 等 TUN 或 fake-ip 代理？**
+`./capture.sh --transparent --dump` 里看到 `198.18.x.x` 是 fake-ip 网段，属正常：透明模式按它解析出的 IP 重定向，
+mitmproxy 自己的出站仍走你的代理。若抓不到包，退回代理模式或临时关掉 TUN。
+
+**Linux 上哪里打开乐跑？**
+`wechat-universal`（AUR 的微信 Linux 版）支持小程序，可直接打开乐跑；
+也可以用 Android 模拟器（Waydroid 等）或能设代理的浏览器环境。
+
 **想换账号**
 上一个账号跑完 → `./capture.sh --once` 用新账号登录 → 直接 `./start.sh`。
 旧进程会被自动顶掉，台账按账号分文件，各自从第 1 次计数。
